@@ -18,7 +18,7 @@ import { CreatePurchaseService } from './application/create-purchase.service';
     OutboxModule,
   ],
   controllers: [PurchaseController],
-  providers: [PurchaseRepository],
+  providers: [PurchaseRepository, CreatePurchaseService],
   exports: [PurchaseRepository, CreatePurchaseService],
 })
 export class PurchaseModule {}
