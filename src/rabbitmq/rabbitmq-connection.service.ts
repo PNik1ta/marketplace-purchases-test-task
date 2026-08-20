@@ -26,7 +26,8 @@ export class RabbitMqConnectionService implements OnModuleDestroy {
 
     this.channel = this.connection.createChannel({
       json: true,
-
+      confirm: true,
+      publishTimeout: 5_000,
       setup: async (channel: ConfirmChannel): Promise<void> => {
         await channel.assertExchange(options.exchange, 'topic', {
           durable: true,

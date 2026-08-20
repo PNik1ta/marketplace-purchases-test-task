@@ -1,5 +1,5 @@
 import { HttpStatus, Injectable } from '@nestjs/common';
-import { DataSource, type EntityManager } from 'typeorm';
+import { DataSource, QueryFailedError, type EntityManager } from 'typeorm';
 
 import { AppException } from '../../common/http/errors/app.exception';
 import { ErrorCode } from '../../common/http/errors/error-code';
@@ -28,6 +28,9 @@ type IdempotencyResult =
       purchase: PurchaseEntity;
     };
 
+const PURCHASE_LOCK_TIMEOUT_MS = 500;
+const POSTGRES_LOCK_NOT_AVAILABLE = '55P03';
+
 @Injectable()
 export class CreatePurchaseService {
   constructor(
@@ -42,96 +45,114 @@ export class CreatePurchaseService {
   async execute(input: CreatePurchaseInput): Promise<CreatePurchaseResult> {
     const requestHash = createPurchaseRequestHash(input);
 
-    return this.dataSource.transaction('READ COMMITTED', async (manager) => {
-      const idempotency = await this.handleIdempotency(
-        manager,
-        input,
-        requestHash,
+    try {
+      return await this.dataSource.transaction(
+        'READ COMMITTED',
+        async (manager) => {
+          const idempotency = await this.handleIdempotency(
+            manager,
+            input,
+            requestHash,
+          );
+
+          if (idempotency.type === 'replay') {
+            return this.toResult(idempotency.purchase);
+          }
+
+          await this.setLockTimeout(manager);
+
+          const item = await this.getItemForPurchase(manager, input);
+
+          const accounts = await this.getAccountsForPurchase(
+            manager,
+            input.buyerId,
+            item.sellerId,
+          );
+
+          const buyer = accounts.find(
+            (account) => account.id === input.buyerId,
+          );
+
+          if (!buyer) {
+            throw new AppException(HttpStatus.NOT_FOUND, {
+              code: ErrorCode.BUYER_NOT_FOUND,
+              message: 'Buyer was not found',
+            });
+          }
+
+          this.ensureSufficientBalance(buyer, item);
+
+          const debited = await this.accountRepository.debitIfEnough(
+            manager,
+            buyer.id,
+            item.price,
+          );
+
+          if (!debited) {
+            throw new AppException(HttpStatus.UNPROCESSABLE_ENTITY, {
+              code: ErrorCode.INSUFFICIENT_FUNDS,
+              message: 'Buyer has insufficient funds',
+            });
+          }
+
+          const credited = await this.accountRepository.credit(
+            manager,
+            item.sellerId,
+            item.price,
+          );
+
+          if (!credited) {
+            throw new Error('Invariant violation: seller credit failed');
+          }
+
+          const sold = await this.itemRepository.markAsSold(manager, item.id);
+
+          if (!sold) {
+            throw new Error(
+              'Invariant violation: locked item could not be marked as sold',
+            );
+          }
+
+          const purchase = await this.purchaseRepository.create(manager, {
+            itemId: item.id,
+            buyerId: input.buyerId,
+            sellerId: item.sellerId,
+            price: item.price,
+          });
+
+          await this.outboxRepository.createPurchaseCompleted(manager, {
+            purchaseId: purchase.id,
+            itemId: purchase.itemId,
+            buyerId: purchase.buyerId,
+            sellerId: purchase.sellerId,
+            amount: purchase.price.toFixed(2),
+          });
+
+          const linked = await this.idempotencyRepository.linkPurchase(
+            manager,
+            idempotency.requestId,
+            purchase.id,
+          );
+
+          if (!linked) {
+            throw new Error(
+              'Invariant violation: idempotency request could not be linked to purchase',
+            );
+          }
+
+          return this.toResult(purchase);
+        },
       );
-
-      if (idempotency.type === 'replay') {
-        return this.toResult(idempotency.purchase);
-      }
-
-      const item = await this.getItemForPurchase(manager, input);
-
-      const accounts = await this.getAccountsForPurchase(
-        manager,
-        input.buyerId,
-        item.sellerId,
-      );
-
-      const buyer = accounts.find((account) => account.id === input.buyerId);
-
-      if (!buyer) {
-        throw new AppException(HttpStatus.NOT_FOUND, {
-          code: ErrorCode.BUYER_NOT_FOUND,
-          message: 'Buyer was not found',
+    } catch (error: unknown) {
+      if (this.isLockTimeoutError(error)) {
+        throw new AppException(HttpStatus.CONFLICT, {
+          code: ErrorCode.PURCHASE_BUSY,
+          message: 'Purchase is currently being processed',
         });
       }
 
-      this.ensureSufficientBalance(buyer, item);
-
-      const debited = await this.accountRepository.debitIfEnough(
-        manager,
-        buyer.id,
-        item.price,
-      );
-
-      if (!debited) {
-        throw new AppException(HttpStatus.UNPROCESSABLE_ENTITY, {
-          code: ErrorCode.INSUFFICIENT_FUNDS,
-          message: 'Buyer has insufficient funds',
-        });
-      }
-
-      const credited = await this.accountRepository.credit(
-        manager,
-        item.sellerId,
-        item.price,
-      );
-
-      if (!credited) {
-        throw new Error('Invariant violation: seller credit failed');
-      }
-
-      const sold = await this.itemRepository.markAsSold(manager, item.id);
-
-      if (!sold) {
-        throw new Error(
-          'Invariant violation: locked item could not be marked as sold',
-        );
-      }
-
-      const purchase = await this.purchaseRepository.create(manager, {
-        itemId: item.id,
-        buyerId: input.buyerId,
-        sellerId: item.sellerId,
-        price: item.price,
-      });
-
-      await this.outboxRepository.createPurchaseCompleted(manager, {
-        purchaseId: purchase.id,
-        itemId: purchase.itemId,
-        buyerId: purchase.buyerId,
-        sellerId: purchase.sellerId,
-        amount: purchase.price.toFixed(2),
-      });
-
-      const linked = await this.idempotencyRepository.linkPurchase(
-        manager,
-        idempotency.requestId,
-        purchase.id,
-      );
-
-      if (!linked) {
-        throw new Error(
-          'Invariant violation: idempotency request could not be linked to purchase',
-        );
-      }
-
-      return this.toResult(purchase);
-    });
+      throw error;
+    }
   }
 
   private async handleIdempotency(
@@ -273,5 +294,26 @@ export class CreatePurchaseService {
       price: purchase.price.toFixed(2),
       createdAt: purchase.createdAt.toISOString(),
     };
+  }
+
+  private async setLockTimeout(manager: EntityManager): Promise<void> {
+    await manager.query(`SELECT set_config('lock_timeout', $1, true)`, [
+      `${PURCHASE_LOCK_TIMEOUT_MS}ms`,
+    ]);
+  }
+
+  private isLockTimeoutError(error: unknown): boolean {
+    if (!(error instanceof QueryFailedError)) {
+      return false;
+    }
+
+    const driverError: unknown = error.driverError;
+
+    return (
+      typeof driverError === 'object' &&
+      driverError !== null &&
+      'code' in driverError &&
+      driverError.code === POSTGRES_LOCK_NOT_AVAILABLE
+    );
   }
 }

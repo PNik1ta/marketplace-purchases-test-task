@@ -6,6 +6,7 @@ import { IdempotencyRequestEntity } from '../idempotency/entities/idempotency-re
 import { ItemEntity } from '../item/entities/item.entity';
 import { OutboxEventEntity } from '../outbox/entities/outbox-event.entity';
 import { PurchaseEntity } from '../purchase/entities/purchase.entity';
+import { join } from 'node:path';
 
 const dataSource = new DataSource({
   ...postgresOptions,
@@ -16,7 +17,7 @@ const dataSource = new DataSource({
     IdempotencyRequestEntity,
     OutboxEventEntity,
   ],
-  migrations: ['src/database/migrations/*.ts'],
+  migrations: [join(__dirname, 'migrations/*{.ts,.js}')],
   synchronize: false,
 });
 

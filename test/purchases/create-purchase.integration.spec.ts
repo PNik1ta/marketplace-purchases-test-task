@@ -263,6 +263,133 @@ describe('CreatePurchaseService integration', () => {
     expect(idempotencyRequests).toHaveLength(1);
   });
 
+  it('prevents double spending when one buyer purchases two items concurrently', async () => {
+    const accountRepository = database.dataSource.getRepository(AccountEntity);
+
+    const itemRepository = database.dataSource.getRepository(ItemEntity);
+
+    const purchaseRepository =
+      database.dataSource.getRepository(PurchaseEntity);
+
+    const outboxRepository =
+      database.dataSource.getRepository(OutboxEventEntity);
+
+    const idempotencyRepository = database.dataSource.getRepository(
+      IdempotencyRequestEntity,
+    );
+
+    const seller = await accountRepository.save(
+      accountRepository.create({
+        balance: new BigNumber('100.00'),
+      }),
+    );
+
+    const buyer = await accountRepository.save(
+      accountRepository.create({
+        balance: new BigNumber('150.00'),
+      }),
+    );
+
+    const items = await itemRepository.save([
+      itemRepository.create({
+        sellerId: seller.id,
+        price: new BigNumber('100.00'),
+        status: ItemStatus.AVAILABLE,
+        version: 1,
+      }),
+      itemRepository.create({
+        sellerId: seller.id,
+        price: new BigNumber('100.00'),
+        status: ItemStatus.AVAILABLE,
+        version: 1,
+      }),
+    ]);
+
+    const results = await Promise.allSettled(
+      items.map((item, index) =>
+        service.execute({
+          buyerId: buyer.id,
+          itemId: item.id,
+          expectedItemVersion: 1,
+          idempotencyKey: `double-spend-${index}`,
+        }),
+      ),
+    );
+
+    const successfulResults = results.filter(
+      (result) => result.status === 'fulfilled',
+    );
+
+    const failedResults = results.filter(
+      (result) => result.status === 'rejected',
+    );
+
+    expect(successfulResults).toHaveLength(1);
+    expect(failedResults).toHaveLength(1);
+
+    const failedResult = failedResults[0];
+
+    expect(failedResult.reason).toBeInstanceOf(AppException);
+
+    if (!(failedResult.reason instanceof AppException)) {
+      throw failedResult.reason;
+    }
+
+    expect(failedResult.reason.getStatus()).toBe(
+      HttpStatus.UNPROCESSABLE_ENTITY,
+    );
+
+    expect(failedResult.reason.getResponse()).toMatchObject({
+      code: ErrorCode.INSUFFICIENT_FUNDS,
+    });
+
+    const updatedBuyer = await accountRepository.findOneByOrFail({
+      id: buyer.id,
+    });
+
+    const updatedSeller = await accountRepository.findOneByOrFail({
+      id: seller.id,
+    });
+
+    expect(updatedBuyer.balance.toFixed(2)).toBe('50.00');
+    expect(updatedSeller.balance.toFixed(2)).toBe('200.00');
+
+    const purchases = await purchaseRepository.find();
+
+    expect(purchases).toHaveLength(1);
+
+    const purchasedItemId = purchases[0].itemId;
+
+    const updatedItems = await itemRepository.findBy({
+      id: In(items.map((item) => item.id)),
+    });
+
+    const soldItems = updatedItems.filter(
+      (item) => item.status === ItemStatus.SOLD,
+    );
+
+    const availableItems = updatedItems.filter(
+      (item) => item.status === ItemStatus.AVAILABLE,
+    );
+
+    expect(soldItems).toHaveLength(1);
+    expect(availableItems).toHaveLength(1);
+
+    expect(soldItems[0].id).toBe(purchasedItemId);
+
+    expect(soldItems[0].version).toBe(2);
+    expect(availableItems[0].version).toBe(1);
+
+    const outboxEvents = await outboxRepository.find();
+
+    expect(outboxEvents).toHaveLength(1);
+
+    const idempotencyRequests = await idempotencyRepository.find();
+
+    expect(idempotencyRequests).toHaveLength(1);
+    expect(idempotencyRequests[0].purchaseId).toBe(purchases[0].id);
+  });
+
   it('returns the same purchase for concurrent requests with the same idempotency key', async () => {
     const accountRepository = database.dataSource.getRepository(AccountEntity);
 
@@ -419,5 +546,103 @@ describe('CreatePurchaseService integration', () => {
         code: ErrorCode.IDEMPOTENCY_KEY_REUSED,
       });
     }
+  });
+
+  it('returns PURCHASE_BUSY when the purchase lock cannot be acquired in time', async () => {
+    const accountRepository = database.dataSource.getRepository(AccountEntity);
+
+    const itemRepository = database.dataSource.getRepository(ItemEntity);
+
+    const seller = await accountRepository.save(
+      accountRepository.create({
+        balance: new BigNumber('100.00'),
+      }),
+    );
+
+    const buyer = await accountRepository.save(
+      accountRepository.create({
+        balance: new BigNumber('500.00'),
+      }),
+    );
+
+    const item = await itemRepository.save(
+      itemRepository.create({
+        sellerId: seller.id,
+        price: new BigNumber('150.00'),
+        status: ItemStatus.AVAILABLE,
+        version: 1,
+      }),
+    );
+
+    const queryRunner = database.dataSource.createQueryRunner();
+
+    await queryRunner.connect();
+    await queryRunner.startTransaction();
+
+    try {
+      await queryRunner.query(
+        `
+        SELECT id
+        FROM items
+        WHERE id = $1
+        FOR UPDATE
+      `,
+        [item.id],
+      );
+
+      try {
+        await service.execute({
+          buyerId: buyer.id,
+          itemId: item.id,
+          expectedItemVersion: 1,
+          idempotencyKey: 'busy-purchase',
+        });
+
+        throw new Error('Expected purchase to be busy');
+      } catch (error: unknown) {
+        expect(error).toBeInstanceOf(AppException);
+
+        if (!(error instanceof AppException)) {
+          throw error;
+        }
+
+        expect(error.getStatus()).toBe(HttpStatus.CONFLICT);
+
+        expect(error.getResponse()).toMatchObject({
+          code: ErrorCode.PURCHASE_BUSY,
+        });
+      }
+    } finally {
+      await queryRunner.rollbackTransaction();
+      await queryRunner.release();
+    }
+
+    const purchases = await database.dataSource
+      .getRepository(PurchaseEntity)
+      .find();
+
+    expect(purchases).toHaveLength(0);
+
+    const idempotencyRequests = await database.dataSource
+      .getRepository(IdempotencyRequestEntity)
+      .find();
+
+    expect(idempotencyRequests).toHaveLength(0);
+
+    const updatedBuyer = await accountRepository.findOneByOrFail({
+      id: buyer.id,
+    });
+
+    const updatedSeller = await accountRepository.findOneByOrFail({
+      id: seller.id,
+    });
+
+    const updatedItem = await itemRepository.findOneByOrFail({
+      id: item.id,
+    });
+
+    expect(updatedBuyer.balance.toFixed(2)).toBe('500.00');
+    expect(updatedSeller.balance.toFixed(2)).toBe('100.00');
+    expect(updatedItem.status).toBe(ItemStatus.AVAILABLE);
   });
 });
