@@ -1,3 +1,5 @@
+import 'dotenv/config';
+
 import { envSchema } from './env.schema';
 import { Config } from './types/config';
 
