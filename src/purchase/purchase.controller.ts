@@ -9,9 +9,12 @@ import {
 } from './dto/create-purchase.schema';
 
 import { idempotencyKeySchema } from './dto/idempotency-key.schema';
+import { CreatePurchaseService } from './application/create-purchase.service';
 
 @Controller('purchases')
 export class PurchaseController {
+  constructor(private readonly createPurchaseService: CreatePurchaseService) {}
+
   @Post()
   createPurchase(
     @Body(new ZodValidationPipe(createPurchaseSchema))
@@ -20,9 +23,11 @@ export class PurchaseController {
     @IdempotencyKey(undefined, new ZodValidationPipe(idempotencyKeySchema))
     idempotencyKey: string,
   ) {
-    return {
-      body,
+    return this.createPurchaseService.execute({
+      buyerId: body.buyerId,
+      itemId: body.itemId,
+      expectedItemVersion: body.expectedItemVersion,
       idempotencyKey,
-    };
+    });
   }
 }

@@ -8,7 +8,7 @@ import {
   Unique,
 } from 'typeorm';
 
-import { PurchaseEntity } from '../../purchases/entities/purchase.entity';
+import { PurchaseEntity } from '../../purchase/entities/purchase.entity';
 
 @Entity('idempotency_requests')
 @Unique('UQ_idempotency_requests_buyer_key', ['buyerId', 'key'])

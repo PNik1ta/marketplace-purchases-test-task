@@ -8,7 +8,7 @@ import {
   PrimaryGeneratedColumn,
 } from 'typeorm';
 
-import { AccountEntity } from '../../accounts/entities/account.entity';
+import { AccountEntity } from '../../account/entities/account.entity';
 import { bigNumberTransformer } from '../../database/transformers/big-number.transformer';
 import { ItemStatus } from '../enums/item-status';
 

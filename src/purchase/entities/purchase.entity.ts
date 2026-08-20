@@ -10,9 +10,9 @@ import {
   Unique,
 } from 'typeorm';
 
-import { AccountEntity } from '../../accounts/entities/account.entity';
+import { AccountEntity } from '../../account/entities/account.entity';
 import { bigNumberTransformer } from '../../database/transformers/big-number.transformer';
-import { ItemEntity } from '../../items/entities/item.entity';
+import { ItemEntity } from '../../item/entities/item.entity';
 
 @Entity('purchases')
 @Unique('UQ_purchases_item_id', ['itemId'])
