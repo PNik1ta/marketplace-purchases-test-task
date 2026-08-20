@@ -12,5 +12,10 @@ export interface Config {
       password: string;
       database: string;
     };
+
+    rabbitmq: {
+      url: string;
+      exchange: string;
+    };
   };
 }
