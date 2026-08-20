@@ -14,6 +14,7 @@ import { ItemStatus } from '../enums/item-status';
 
 @Entity('items')
 @Check('CHK_items_price_positive', '"price" > 0')
+@Check('CHK_items_version_positive', '"version" > 0')
 @Check(
   'CHK_items_status',
   `"status" IN ('${ItemStatus.AVAILABLE}', '${ItemStatus.SOLD}')`,
@@ -50,4 +51,10 @@ export class ItemEntity {
     default: ItemStatus.AVAILABLE,
   })
   status!: ItemStatus;
+
+  @Column({
+    type: 'integer',
+    default: 1,
+  })
+  version!: number;
 }

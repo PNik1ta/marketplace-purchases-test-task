@@ -15,9 +15,9 @@ import { bigNumberTransformer } from '../../database/transformers/big-number.tra
 import { ItemEntity } from '../../items/entities/item.entity';
 
 @Entity('purchases')
-@Check('CHK_purchases_price_positive', '"price" > 0')
 @Unique('UQ_purchases_item_id', ['itemId'])
-@Unique('UQ_purchases_idempotency_key', ['idempotencyKey'])
+@Check('CHK_purchases_price_positive', '"price" > 0')
+@Check('CHK_purchases_buyer_is_not_seller', '"buyer_id" <> "seller_id"')
 export class PurchaseEntity {
   @PrimaryGeneratedColumn('uuid')
   id!: string;
@@ -71,20 +71,6 @@ export class PurchaseEntity {
     transformer: bigNumberTransformer,
   })
   price!: BigNumber;
-
-  @Column({
-    name: 'idempotency_key',
-    type: 'varchar',
-    length: 255,
-  })
-  idempotencyKey!: string;
-
-  @Column({
-    name: 'request_hash',
-    type: 'varchar',
-    length: 64,
-  })
-  requestHash!: string;
 
   @CreateDateColumn({
     name: 'created_at',
