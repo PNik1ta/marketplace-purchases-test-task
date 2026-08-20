@@ -7,9 +7,11 @@ import { PurchaseModule } from './purchase/purchase.module';
 import { APP_FILTER } from '@nestjs/core';
 import { AppExceptionFilter } from './common/http/filters/app-exception.filter';
 import { RequestIdMiddleware } from './common/http/middleware/request-id.middleware';
+import { ScheduleModule } from '@nestjs/schedule';
 
 @Module({
   imports: [
+    ScheduleModule.forRoot(),
     TypeOrmModule.forRoot({
       ...postgresOptions,
       autoLoadEntities: true,

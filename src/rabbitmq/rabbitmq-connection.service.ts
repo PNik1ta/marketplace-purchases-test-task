@@ -1,11 +1,12 @@
-import { Injectable, OnModuleDestroy } from '@nestjs/common';
+import { Inject, Injectable, OnModuleDestroy } from '@nestjs/common';
 import {
   type AmqpConnectionManager,
   type ChannelWrapper,
   connect,
 } from 'amqp-connection-manager';
 import type { ConfirmChannel } from 'amqplib';
-import { config } from '../config/config';
+
+import { RABBITMQ_OPTIONS, type RabbitMqOptions } from './rabbitmq-options';
 
 @Injectable()
 export class RabbitMqConnectionService implements OnModuleDestroy {
@@ -13,20 +14,23 @@ export class RabbitMqConnectionService implements OnModuleDestroy {
 
   readonly channel: ChannelWrapper;
 
-  constructor() {
-    this.connection = connect([config.infrastructure.rabbitmq.url]);
+  readonly exchange: string;
+
+  constructor(
+    @Inject(RABBITMQ_OPTIONS)
+    options: RabbitMqOptions,
+  ) {
+    this.exchange = options.exchange;
+
+    this.connection = connect([options.url]);
 
     this.channel = this.connection.createChannel({
       json: true,
 
       setup: async (channel: ConfirmChannel): Promise<void> => {
-        await channel.assertExchange(
-          config.infrastructure.rabbitmq.exchange,
-          'topic',
-          {
-            durable: true,
-          },
-        );
+        await channel.assertExchange(options.exchange, 'topic', {
+          durable: true,
+        });
       },
     });
   }
