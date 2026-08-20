@@ -1,5 +1,5 @@
 import { HttpException } from '@nestjs/common';
-import { AppExceptionPayload } from './types/app-exception-payload';
+import { AppExceptionPayload } from './app-exception-payload';
 
 export class AppException extends HttpException {
   constructor(statusCode: number, payload: AppExceptionPayload) {

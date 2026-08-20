@@ -7,9 +7,9 @@ import {
 } from '@nestjs/common';
 import type { Request, Response } from 'express';
 
-import { ErrorCode } from '../errors/types/error-code';
+import { ErrorCode } from '../errors/error-code';
 import type { RequestWithId } from '../types/request-with-id';
-import { AppExceptionPayload } from '../errors/types/app-exception-payload';
+import { AppExceptionPayload } from '../errors/app-exception-payload';
 
 @Catch()
 export class AppExceptionFilter implements ExceptionFilter {

@@ -2,7 +2,7 @@ import { Injectable, PipeTransform } from '@nestjs/common';
 import type { ZodType } from 'zod';
 
 import { AppException } from '../errors/app.exception';
-import { ErrorCode } from '../errors/types/error-code';
+import { ErrorCode } from '../errors/error-code';
 
 @Injectable()
 export class ZodValidationPipe implements PipeTransform {
